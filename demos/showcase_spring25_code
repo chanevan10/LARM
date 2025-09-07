@@ -1,0 +1,211 @@
+#include <Servo.h>
+
+// Define a structure for holding a quadruple of angle values.
+// angle1, angle2, and angle3 are for the servos,
+// motorAngle is the absolute position (in degrees) for the stepper motor.
+struct AngleQuadruple {
+  float angle1;
+  float angle2;
+  float angle3;
+  float motorAngle;
+};
+
+// Predefined list of angle quadruples to execute.
+// (Adjust these values as needed for your application.)
+AngleQuadruple quadrupleList[] = {
+  {0, 0, -131, 0},
+  {35, 0, -131, 60},
+  {35, 90, -131, 60},
+  {35, 90, 131, 60},
+  {35, 90, 131, 30},
+  {-33, 90, 131, 30},
+  {-33, 90, 131, 60},
+  {-33, 90, -131, 60},
+  {0, 0, -131, 0},
+  {0, 0, -131, 0}
+  
+};
+int numQuadruples = sizeof(quadrupleList) / sizeof(quadrupleList[0]);
+int currentQuadIndex = 0;
+
+// Servo objects
+Servo myServo1;
+Servo myServo2;
+Servo myServo3;
+
+// Apparent angles (in degrees) for the three servos.
+// Their starting values match your original system.
+float currentAngle1 = 0, currentAngle2 = 0, currentAngle3 = -131;
+float targetAngle1 = 0, targetAngle2 = 0, targetAngle3 = 0;
+
+// Speeds for servo motion (degrees per update cycle)
+int speed1 = 2, speed2 = 1, speed3 = 2;
+
+// --- Stepper Motor Setup ---
+
+// Motor settings
+int stepsPerRevolution = 800;
+float degreesPerStep = 360.0 / stepsPerRevolution;  // Degrees moved per pulse/step
+unsigned int pulseDelay = 1000;  // Delay (in microseconds) for motor pulse timing
+
+// Motor pins for pulse and direction
+const int motorPulsePin = 6; // PUL pin for the motor
+const int motorDirPin = 5;   // DIR pin for the motor
+
+// Motor absolute angle tracking (assumed to start at 0°)
+float currentMotorAngle = 0.0;
+float targetMotorAngle = 0.0;
+
+// --- Global movement control ---
+unsigned long lastUpdateTime = 0;
+const int updateInterval = 20; // Update all actuators every 20 ms
+
+bool moving = false;
+bool sequenceActive = false;
+
+void setup() {
+  Serial.begin(9600);
+
+  // Attach servos
+  myServo1.attach(9);
+  myServo2.attach(10);
+  myServo3.attach(11);
+
+  // Set initial servo positions (using mapping as before)
+  myServo1.write(mapApparentToServo(1, currentAngle1));
+  myServo2.write(mapApparentToServo(2, currentAngle2));
+  myServo3.write(mapApparentToServo(3, currentAngle3));
+
+  // Initialize motor pins
+  pinMode(motorPulsePin, OUTPUT);
+  pinMode(motorDirPin, OUTPUT);
+  // (Optional: You can initialize the motor driver’s state by setting the pin low.)
+  digitalWrite(motorPulsePin, LOW);
+  digitalWrite(motorDirPin, LOW);
+
+  Serial.println("Type 'start' in the Serial Monitor to execute the maneuvers.");
+}
+
+void loop() {
+  // If no movement is in progress and no sequence is active, check for a command.
+  if (!moving && !sequenceActive && Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command.equalsIgnoreCase("start")) {
+      currentQuadIndex = 0;
+      sequenceActive = true;
+      Serial.println("Starting sequence...");
+    } else {
+      Serial.println("Unknown command. Type 'start' to run maneuvers.");
+    }
+  }
+
+  // If a sequence is active and not currently moving, load the next quadruple.
+  if (sequenceActive && !moving) {
+    if (currentQuadIndex < numQuadruples) {
+      targetAngle1 = quadrupleList[currentQuadIndex].angle1;
+      targetAngle2 = quadrupleList[currentQuadIndex].angle2;
+      targetAngle3 = quadrupleList[currentQuadIndex].angle3;
+      targetMotorAngle = quadrupleList[currentQuadIndex].motorAngle;
+      
+      // Optional: perform range checks here if needed.
+      moving = true;
+      Serial.print("Executing quadruple ");
+      Serial.print(currentQuadIndex);
+      Serial.print(": ");
+      Serial.print(targetAngle1);
+      Serial.print(", ");
+      Serial.print(targetAngle2);
+      Serial.print(", ");
+      Serial.print(targetAngle3);
+      Serial.print(" | Motor: ");
+      Serial.println(targetMotorAngle);
+    } else {
+      sequenceActive = false;
+      Serial.println("Sequence completed. Type 'start' to repeat.");
+    }
+  }
+
+  // Update actuators at fixed intervals if movement is in progress.
+  if (moving && millis() - lastUpdateTime >= updateInterval) {
+    lastUpdateTime = millis();
+
+    // Update servos
+    bool done1 = updateServo(myServo1, currentAngle1, targetAngle1, speed1, 1);
+    bool done2 = updateServo(myServo2, currentAngle2, targetAngle2, speed2, 2);
+    bool done3 = updateServo(myServo3, currentAngle3, targetAngle3, speed3, 3);
+
+    // Update motor (stepper)
+    bool motorDone = updateMotor();
+
+    // When all actuators have reached their targets, mark the motion complete and load the next quadruple.
+    if (done1 && done2 && done3 && motorDone) {
+      moving = false;
+      currentQuadIndex++;
+      // Optional: wait 1 second before moving on to the next set of positions.
+      delay(500);
+    }
+  }
+}
+
+// --- Servo Helper Functions ---
+
+// Map the apparent (mechanical) servo angle to the actual servo pulse value.
+// This function is unchanged from your original logic.
+int mapApparentToServo(int servoNum, float apparentAngle) {
+  float mappedAngle;
+  if (servoNum == 1 || servoNum == 3) {
+    mappedAngle = (-apparentAngle + 131) * 262.5 / 360.0;
+  } else if (servoNum == 2) {
+    mappedAngle = (-apparentAngle + 122.5) * 258.25 / 360.0;
+  } else {
+    mappedAngle = 90;  // Default fallback
+  }
+  return int(mappedAngle);
+}
+
+// Gradually update the servo position until the target is reached.
+bool updateServo(Servo &servo, float &current, float target, int speed, int servoNum) {
+  if (abs(current - target) <= speed) {
+    current = target;
+    servo.write(mapApparentToServo(servoNum, current));
+    return true;
+  }
+
+  if (current < target) current += speed;
+  else if (current > target) current -= speed;
+
+  servo.write(mapApparentToServo(servoNum, current));
+  return false;
+}
+
+// --- Motor Update Function ---
+//
+// This function updates the motor position by moving one step (i.e. one pulse)
+// per update cycle until the motor reaches its target absolute angle.
+bool updateMotor() {
+  float delta = targetMotorAngle - currentMotorAngle;
+  // If the remaining difference is less than one step, snap to target.
+  if (abs(delta) < degreesPerStep) {
+    currentMotorAngle = targetMotorAngle;
+    return true;
+  }
+  
+  // Set the motor direction.
+  digitalWrite(motorDirPin, (delta > 0) ? HIGH : LOW);
+  
+  // Issue one step pulse.
+  digitalWrite(motorPulsePin, HIGH);
+  delayMicroseconds(pulseDelay);
+  digitalWrite(motorPulsePin, LOW);
+  delayMicroseconds(pulseDelay);
+  
+  // Update the current motor angle by one step.
+  if (delta > 0) {
+    currentMotorAngle += degreesPerStep;
+  } else {
+    currentMotorAngle -= degreesPerStep;
+  }
+  
+  return false;
+}
