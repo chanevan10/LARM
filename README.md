@@ -1,8 +1,8 @@
 # LARM
 Repository for the code for LARM
 
-## Arduino Code
-```Arduino``` folder for initial demo code testing movement, movement code
+## DemoCode
+```demos``` folder for initial demo code testing movement, movement code
 
 ## Motion planning
 ```motion_planning``` folder for motion planning with velocity commands
